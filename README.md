@@ -5,7 +5,7 @@ A local, single-file JSON explorer. No server, no dependencies, no build step.
 ## Setup
 
 ```bash
-git clone <repo>
+git clone git@github.com:KristerKasemaa/json-viewer.git
 cd json-viewer
 open json-viewer.html   # or double-click it
 ```
