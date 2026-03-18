@@ -2,7 +2,11 @@
 
 A local, single-file JSON explorer. No server, no dependencies, no build step.
 
-## Setup
+## Use it online
+
+**[json-tool.kristerkasemaa.com](http://json-tool.kristerkasemaa.com/)** — no install needed.
+
+## Self-host / run locally
 
 ```bash
 git clone git@github.com:KristerKasemaa/json-viewer.git
