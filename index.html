@@ -872,6 +872,115 @@ kbd {
 .filter-badge.active { display: inline; }
 
 #filter-status { font-size: 11px; }
+
+/* ══════════════════════════════
+   COMPARE MODE
+   ══════════════════════════════ */
+
+/* Toggle button in header */
+.btn-compare-toggle {
+  background: transparent;
+  color: var(--btn-g-fg);
+  border: 1px solid var(--btn-g-border);
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 4px 11px;
+  cursor: pointer;
+  transition: color 0.1s, border-color 0.1s, background 0.1s;
+  flex-shrink: 0;
+}
+.btn-compare-toggle:hover { color: var(--btn-g-hover-fg); border-color: var(--btn-g-hover-border); }
+.btn-compare-toggle.active { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+
+/* Hide single-doc elements in compare mode */
+body.compare-mode #tab-bar      { display: none; }
+body.compare-mode .main         { display: none !important; }
+body.compare-mode .footer-normal { display: none !important; }
+
+/* Compare toolbar */
+.cmp-toolbar {
+  display: none;
+  flex-shrink: 0;
+  background: var(--bg-alt);
+  border-bottom: 1px solid var(--border);
+  padding: 5px 12px;
+  align-items: center;
+  gap: 6px;
+}
+body.compare-mode .cmp-toolbar { display: flex; }
+.cmp-toolbar-sep { width: 1px; height: 16px; background: var(--border); flex-shrink: 0; margin: 0 4px; }
+#btn-cmp-sync.synced { background: var(--accent); color: var(--accent-fg); border-color: transparent; }
+
+/* Compare main layout */
+.cmp-main { display: none; flex: 1; min-height: 0; }
+body.compare-mode .cmp-main { display: flex; }
+
+.cmp-side { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; }
+
+/* Compact always-visible textarea */
+.cmp-textarea {
+  display: block;
+  width: 100%;
+  flex: none;       /* override global textarea { flex: 1 } — JS controls height via drag */
+  min-height: 0;
+  height: 80px;
+  background: var(--bg);
+  color: var(--fg);
+  border: none;
+  outline: none;
+  padding: 4px 16px;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.65;
+  resize: none;
+  tab-size: 2;
+  overflow-y: auto;
+}
+.cmp-textarea::placeholder { color: var(--muted2); }
+
+/* Vertical drag handle between input and tree within each side */
+.cmp-resizer-h {
+  flex-shrink: 0;
+  height: 6px;
+  cursor: row-resize;
+  background: var(--border);
+  transition: background 0.12s;
+}
+.cmp-resizer-h:hover, .cmp-resizer-h.dragging { background: var(--accent); }
+
+/* Compare search inputs */
+.cmp-search-inp {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--fg);
+  font-family: inherit;
+  font-size: 12px;
+  width: 130px;
+  padding: 3px;
+}
+.cmp-search-inp::placeholder { color: var(--muted2); }
+.cmp-search-cnt {
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+  min-width: 38px;
+  text-align: right;
+}
+.cmp-search-cnt.no-match { color: var(--s-err); }
+
+/* Compare footer */
+.cmp-footer { display: none; flex: 1; align-items: center; gap: 8px; overflow: hidden; }
+body.compare-mode .cmp-footer { display: flex; }
+.cmp-path-display {
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+}
+.cmp-path-mid { color: var(--border); flex-shrink: 0; margin: 0 6px; }
 </style>
 </head>
 <body>
@@ -880,6 +989,7 @@ kbd {
   <h1>JSON Viewer</h1>
   <span class="hint">paste · click nodes to expand/collapse · click value to pin path</span>
   <button class="btn-shortcuts" onclick="toggleShortcuts()" title="Keyboard shortcuts (?)">?</button>
+  <button id="btn-compare" class="btn-compare-toggle" onclick="toggleCompareMode()" title="Side-by-side compare view">⊟ Compare</button>
   <div class="theme-wrap">
     <span class="theme-label">Theme</span>
     <select id="theme-select" onchange="applyTheme(this.value)">
@@ -901,6 +1011,16 @@ kbd {
 <div id="tab-bar">
   <div id="tab-list"></div>
   <button id="tab-add" title="New tab">+</button>
+</div>
+
+<!-- ── Compare toolbar (visible only in compare mode) ── -->
+<div class="cmp-toolbar">
+  <span class="bar-label">Compare</span>
+  <button id="btn-cmp-sync" class="btn-g" onclick="toggleCmpSync()">⟺ Independent scroll</button>
+  <div class="cmp-toolbar-sep"></div>
+  <button class="btn-g" onclick="cmpExpandBoth()">Expand Both</button>
+  <button class="btn-g" onclick="cmpCollapseBoth()">Collapse Both</button>
+  <button class="btn-g" onclick="cmpDepth2Both()">Depth 2 Both</button>
 </div>
 
 <div class="main">
@@ -967,15 +1087,89 @@ kbd {
 
 </div>
 
+<!-- ── Compare mode: two-column layout (Option B) ── -->
+<div class="cmp-main" id="cmp-main">
+
+  <!-- Left side -->
+  <div class="cmp-side" id="cmp-side-l">
+    <div class="bar">
+      <span class="bar-label">Left JSON</span>
+      <span id="cmp-status-l"></span>
+    </div>
+    <textarea id="cmp-inp-l" class="cmp-textarea" placeholder="Paste JSON here… (auto-parses on paste, ⌘↵ to parse)"></textarea>
+    <div class="cmp-resizer-h" id="cmp-rh-l"></div>
+    <div class="bar bar-bottom">
+      <button class="btn-p" onclick="cmpSideL.parse()">Parse</button>
+      <button class="btn-g" onclick="cmpSideL.fmt()">Format</button>
+      <button class="btn-g" onclick="cmpSideL.clear()">Clear</button>
+    </div>
+    <div class="bar">
+      <span class="bar-label">Tree</span>
+      <div class="search-wrap">
+        <span class="search-icon">⌕</span>
+        <input id="cmp-search-l" class="cmp-search-inp" type="text" placeholder="Search…" autocomplete="off">
+        <span id="cmp-count-l" class="cmp-search-cnt"></span>
+        <button id="cmp-prev-l" class="btn-nav" disabled>↑</button>
+        <button id="cmp-next-l" class="btn-nav" disabled>↓</button>
+      </div>
+      <button class="btn-g" onclick="expandAll(cmpSideL.treeEl)">Expand</button>
+      <button class="btn-g" onclick="collapseAll(cmpSideL.treeEl)">Collapse</button>
+    </div>
+    <div id="cmp-tree-l" class="tree-scroll">
+      <div class="empty-msg">Paste JSON above to explore it here.</div>
+    </div>
+  </div>
+
+  <div class="resizer" id="cmp-resizer-main"></div>
+
+  <!-- Right side -->
+  <div class="cmp-side" id="cmp-side-r">
+    <div class="bar">
+      <span class="bar-label">Right JSON</span>
+      <span id="cmp-status-r"></span>
+    </div>
+    <textarea id="cmp-inp-r" class="cmp-textarea" placeholder="Paste JSON here… (auto-parses on paste, ⌘↵ to parse)"></textarea>
+    <div class="cmp-resizer-h" id="cmp-rh-r"></div>
+    <div class="bar bar-bottom">
+      <button class="btn-p" onclick="cmpSideR.parse()">Parse</button>
+      <button class="btn-g" onclick="cmpSideR.fmt()">Format</button>
+      <button class="btn-g" onclick="cmpSideR.clear()">Clear</button>
+    </div>
+    <div class="bar">
+      <span class="bar-label">Tree</span>
+      <div class="search-wrap">
+        <span class="search-icon">⌕</span>
+        <input id="cmp-search-r" class="cmp-search-inp" type="text" placeholder="Search…" autocomplete="off">
+        <span id="cmp-count-r" class="cmp-search-cnt"></span>
+        <button id="cmp-prev-r" class="btn-nav" disabled>↑</button>
+        <button id="cmp-next-r" class="btn-nav" disabled>↓</button>
+      </div>
+      <button class="btn-g" onclick="expandAll(cmpSideR.treeEl)">Expand</button>
+      <button class="btn-g" onclick="collapseAll(cmpSideR.treeEl)">Collapse</button>
+    </div>
+    <div id="cmp-tree-r" class="tree-scroll">
+      <div class="empty-msg">Paste JSON above to explore it here.</div>
+    </div>
+  </div>
+
+</div>
+
 <!-- ── Path bar ── -->
 <footer id="footer">
-  <span class="path-label">path</span>
-  <span id="path-display" title="Click to copy path"><span class="path-root">hover a node to see its path</span></span>
-  <span class="dp-wrap" title="Click to copy DeepPick schema">
+  <span class="footer-normal path-label">path</span>
+  <span class="footer-normal" id="path-display" title="Click to copy path"><span class="path-root">hover a node to see its path</span></span>
+  <span class="footer-normal dp-wrap" title="Click to copy DeepPick schema">
     <span class="dp-label">dp</span>
     <span id="dp-value"></span>
   </span>
-  <span class="path-unpin" onclick="unpinPath()" title="Escape to unpin">unpin</span>
+  <span class="footer-normal path-unpin" onclick="unpinPath()" title="Escape to unpin">unpin</span>
+  <div class="cmp-footer">
+    <span class="path-label">L</span>
+    <span id="cmp-path-l" class="cmp-path-display"><span class="path-root">hover a node</span></span>
+    <span class="cmp-path-mid">|</span>
+    <span class="path-label">R</span>
+    <span id="cmp-path-r" class="cmp-path-display"><span class="path-root">hover a node</span></span>
+  </div>
 </footer>
 
 <!-- ── Floating tooltip ── -->
@@ -1470,19 +1664,20 @@ function setFilterStatus(msg, cls) {
 }
 
 /* ── Tree controls ── */
-function expandAll() {
-  tree.querySelectorAll('.node').forEach(n => n.classList.remove('collapsed'));
+function expandAll(treeEl) {
+  (treeEl || tree).querySelectorAll('.node').forEach(n => n.classList.remove('collapsed'));
 }
-function collapseAll() {
-  tree.querySelectorAll('.node').forEach(n => {
+function collapseAll(treeEl) {
+  (treeEl || tree).querySelectorAll('.node').forEach(n => {
     if (n.querySelector(':scope > .kids')) n.classList.add('collapsed');
   });
 }
-function collapseDeep(maxDepth) {
-  tree.querySelectorAll('.node').forEach(n => {
+function collapseDeep(maxDepth, treeEl) {
+  const t = treeEl || tree;
+  t.querySelectorAll('.node').forEach(n => {
     if (!n.querySelector(':scope > .kids')) return;
     let depth = 0, el = n;
-    while (el && el !== tree) { if (el.classList.contains('node')) depth++; el = el.parentElement; }
+    while (el && el !== t) { if (el.classList.contains('node')) depth++; el = el.parentElement; }
     depth--;
     if (depth >= maxDepth) n.classList.add('collapsed');
     else                   n.classList.remove('collapsed');
@@ -1636,10 +1831,11 @@ function escStr(s) {
 /* ══════════════════════════════
    PATH HELPERS
    ══════════════════════════════ */
-function getPathSegs(rowEl) {
+function getPathSegs(rowEl, boundaryEl) {
   const segs = [];
   let el = rowEl.parentElement;
-  while (el && el !== tree) {
+  const boundary = boundaryEl || tree;
+  while (el && el !== boundary) {
     if (el.classList.contains('node') && el.dataset.key !== undefined) {
       segs.unshift({ key: el.dataset.key, isIdx: el.dataset.idx === 'true' });
     }
@@ -2482,6 +2678,241 @@ doClear = function() {
   } else {
     addTab('Tab 1');
   }
+})();
+
+/* ══════════════════════════════
+   COMPARE MODE
+   ══════════════════════════════ */
+
+class CmpSide {
+  constructor(id) {
+    this.id       = id;
+    this.inp      = document.getElementById('cmp-inp-'    + id);
+    this.treeEl   = document.getElementById('cmp-tree-'   + id);
+    this.statusEl = document.getElementById('cmp-status-' + id);
+    this.pathEl   = document.getElementById('cmp-path-'   + id);
+    this.searchInp= document.getElementById('cmp-search-' + id);
+    this.cntEl    = document.getElementById('cmp-count-'  + id);
+    this.btnPrev  = document.getElementById('cmp-prev-'   + id);
+    this.btnNext  = document.getElementById('cmp-next-'   + id);
+    this.savedHL  = []; this.matches = []; this.curIdx = -1;
+    this.pathPinned = false;
+    this._init();
+  }
+
+  _init() {
+    this.inp.addEventListener('paste',   () => setTimeout(() => this.parse(), 40));
+    this.inp.addEventListener('keydown', e  => { if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') this.parse(); });
+
+    let timer = null;
+    this.searchInp.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(() => this.doSearch(), 150); });
+    this.searchInp.addEventListener('keydown', e => {
+      if (e.key === 'Escape') { this.searchInp.value = ''; this.doSearch(); this.searchInp.blur(); }
+      else if (e.key === 'Enter') { e.preventDefault(); this.navMatch(e.shiftKey ? -1 : 1); }
+    });
+    this.btnPrev.addEventListener('click', () => this.navMatch(-1));
+    this.btnNext.addEventListener('click', () => this.navMatch(1));
+
+    this.treeEl.addEventListener('mouseover', e => {
+      if (this.pathPinned) return;
+      const row = e.target.closest('.row'); if (!row) return;
+      buildPathInto(this.pathEl, getPathSegs(row, this.treeEl));
+    });
+    this.treeEl.addEventListener('mouseleave', () => {
+      if (this.pathPinned) return;
+      this.pathEl.textContent = '';
+      this.pathEl.appendChild(spEl('path-root', 'hover a node'));
+    });
+    this.treeEl.addEventListener('click', e => {
+      if (e.target.classList.contains('arr')) return;
+      const row = e.target.closest('.row'); if (!row) return;
+      buildPathInto(this.pathEl, getPathSegs(row, this.treeEl));
+      this.pathPinned = true;
+    });
+    this.pathEl.addEventListener('click', () => {
+      if (!this.pathPinned) return;
+      this.pathPinned = false;
+      this.pathEl.textContent = '';
+      this.pathEl.appendChild(spEl('path-root', 'hover a node'));
+    });
+  }
+
+  parse() {
+    const raw = this.inp.value.trim();
+    this.savedHL = []; this.matches = []; this.curIdx = -1;
+    if (!raw) { this.treeEl.innerHTML = ''; this._setStatus('', ''); this._updateCount(); return; }
+    let data;
+    try { data = JSON.parse(raw); }
+    catch (e) {
+      this.treeEl.innerHTML = '';
+      const d = document.createElement('div'); d.className = 'parse-err';
+      d.textContent = 'SyntaxError: ' + e.message;
+      this.treeEl.appendChild(d);
+      this._setStatus('invalid JSON', 'err'); this._updateCount(); return;
+    }
+    this.treeEl.innerHTML = '';
+    this.treeEl.appendChild(build(data, null, true));
+    this._setStatus(fmtBytes(new TextEncoder().encode(raw).length), 'ok');
+    if (this.searchInp.value.trim()) this.doSearch(); else this._updateCount();
+  }
+
+  fmt() {
+    const raw = this.inp.value.trim(); if (!raw) return;
+    try { this.inp.value = JSON.stringify(JSON.parse(raw), null, 2); this._setStatus('formatted', 'ok'); }
+    catch { this._setStatus('invalid JSON', 'err'); }
+  }
+
+  clear() {
+    this.inp.value = ''; this.savedHL = []; this.matches = []; this.curIdx = -1;
+    this.searchInp.value = ''; this._updateCount();
+    this.treeEl.innerHTML = '<div class="empty-msg">Paste JSON above to explore it here.</div>';
+    this._setStatus('', ''); this.pathPinned = false;
+    this.pathEl.textContent = ''; this.pathEl.appendChild(spEl('path-root', 'hover a node'));
+  }
+
+  _setStatus(msg, cls) { this.statusEl.textContent = msg; this.statusEl.className = cls ? 's-' + cls : ''; }
+
+  doSearch() {
+    this.savedHL.forEach(({ el, origText }) => { el.textContent = origText; });
+    this.savedHL = []; this.matches = []; this.curIdx = -1;
+    const q = this.searchInp.value; if (!q.trim()) { this._updateCount(); return; }
+    const ql = q.toLowerCase();
+    this.treeEl.querySelectorAll('.ck,.cs,.cn,.cb,.cx').forEach(el => {
+      const text = el.textContent; if (!text.toLowerCase().includes(ql)) return;
+      this.savedHL.push({ el, origText: text }); el.textContent = '';
+      const tl = text.toLowerCase(); let pos = 0;
+      while (true) {
+        const idx = tl.indexOf(ql, pos); if (idx === -1) break;
+        if (idx > pos) el.appendChild(document.createTextNode(text.slice(pos, idx)));
+        const m = document.createElement('mark'); m.textContent = text.slice(idx, idx + q.length);
+        el.appendChild(m); this.matches.push(m); pos = idx + q.length;
+      }
+      if (pos < text.length) el.appendChild(document.createTextNode(text.slice(pos)));
+      let node = el.closest('.node');
+      while (node && node !== this.treeEl) { node.classList.remove('collapsed'); node = node.parentElement?.closest('.node'); }
+    });
+    this._updateCount();
+    if (this.matches.length > 0) { this.curIdx = 0; this._activateMatch(0); }
+  }
+
+  navMatch(delta) { if (!this.matches.length) return; this.curIdx = (this.curIdx + delta + this.matches.length) % this.matches.length; this._activateMatch(this.curIdx); }
+
+  _activateMatch(idx) {
+    this.matches.forEach(m => m.classList.remove('cur'));
+    const m = this.matches[idx]; if (!m) return;
+    m.classList.add('cur'); m.scrollIntoView({ block: 'center', behavior: 'instant' }); this._updateCount();
+  }
+
+  _updateCount() {
+    const q = this.searchInp.value.trim();
+    if (!q) { this.cntEl.textContent = ''; this.btnPrev.disabled = true; this.btnNext.disabled = true; return; }
+    if (!this.matches.length) {
+      this.cntEl.textContent = 'no match'; this.cntEl.className = 'cmp-search-cnt no-match';
+      this.btnPrev.disabled = true; this.btnNext.disabled = true;
+    } else {
+      this.cntEl.textContent = (this.curIdx + 1) + '/' + this.matches.length; this.cntEl.className = 'cmp-search-cnt';
+      this.btnPrev.disabled = false; this.btnNext.disabled = false;
+    }
+  }
+}
+
+/* ── Instantiate sides (lazy — DOM is ready) ── */
+let cmpSideL, cmpSideR;
+
+/* ── Resizers for compare mode ── */
+(function () {
+  function makeColResizer(resEl, leftSideEl) {
+    resEl.addEventListener('mousedown', e => {
+      e.preventDefault();
+      const startX = e.clientX, startW = leftSideEl.offsetWidth;
+      resEl.classList.add('dragging');
+      document.body.style.cursor = 'col-resize'; document.body.style.userSelect = 'none';
+      function onMove(e) {
+        const newW = Math.max(200, Math.min(window.innerWidth - 200, startW + (e.clientX - startX)));
+        leftSideEl.style.flex = 'none'; leftSideEl.style.width = newW + 'px';
+      }
+      function onUp() {
+        resEl.classList.remove('dragging'); document.body.style.cursor = ''; document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+      }
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    });
+  }
+
+  function makeRowResizer(resEl, textareaEl) {
+    resEl.addEventListener('mousedown', e => {
+      e.preventDefault();
+      const startY = e.clientY, startH = textareaEl.offsetHeight;
+      resEl.classList.add('dragging');
+      document.body.style.cursor = 'row-resize'; document.body.style.userSelect = 'none';
+      function onMove(e) {
+        const newH = Math.max(0, Math.min(500, startH + (e.clientY - startY)));
+        textareaEl.style.height = newH + 'px';
+      }
+      function onUp() {
+        resEl.classList.remove('dragging'); document.body.style.cursor = ''; document.body.style.userSelect = '';
+        document.removeEventListener('mousemove', onMove); document.removeEventListener('mouseup', onUp);
+      }
+      document.addEventListener('mousemove', onMove); document.addEventListener('mouseup', onUp);
+    });
+  }
+
+  makeColResizer(document.getElementById('cmp-resizer-main'), document.getElementById('cmp-side-l'));
+  makeRowResizer(document.getElementById('cmp-rh-l'), document.getElementById('cmp-inp-l'));
+  makeRowResizer(document.getElementById('cmp-rh-r'), document.getElementById('cmp-inp-r'));
+})();
+
+/* ── Sync scroll ── */
+let cmpSyncScroll = false, cmpSyncing = false;
+const cmpTreeL = document.getElementById('cmp-tree-l');
+const cmpTreeR = document.getElementById('cmp-tree-r');
+cmpTreeL.addEventListener('scroll', () => { if (!cmpSyncScroll || cmpSyncing) return; cmpSyncing = true; cmpTreeR.scrollTop = cmpTreeL.scrollTop; cmpTreeR.scrollLeft = cmpTreeL.scrollLeft; cmpSyncing = false; });
+cmpTreeR.addEventListener('scroll', () => { if (!cmpSyncScroll || cmpSyncing) return; cmpSyncing = true; cmpTreeL.scrollTop = cmpTreeR.scrollTop; cmpTreeL.scrollLeft = cmpTreeR.scrollLeft; cmpSyncing = false; });
+
+function toggleCmpSync() {
+  cmpSyncScroll = !cmpSyncScroll;
+  const btn = document.getElementById('btn-cmp-sync');
+  btn.textContent = cmpSyncScroll ? '🔒 Synced scroll' : '⟺ Independent scroll';
+  btn.classList.toggle('synced', cmpSyncScroll);
+}
+
+function cmpExpandBoth()   { expandAll(cmpTreeL);       expandAll(cmpTreeR); }
+function cmpCollapseBoth() { collapseAll(cmpTreeL);      collapseAll(cmpTreeR); }
+function cmpDepth2Both()   { collapseDeep(2, cmpTreeL);  collapseDeep(2, cmpTreeR); }
+
+/* ── Mode toggle ── */
+let compareModeActive = false;
+
+function enterCompareMode() {
+  if (!cmpSideL) { cmpSideL = new CmpSide('l'); cmpSideR = new CmpSide('r'); }
+  // Pre-populate left side from current active tab
+  const cur = tabs.find(t => t.id === activeTabId);
+  if (cur && cur.inputText.trim() && !cmpSideL.inp.value.trim()) {
+    cmpSideL.inp.value = cur.inputText;
+    cmpSideL.parse();
+  }
+  document.body.classList.add('compare-mode');
+  document.getElementById('btn-compare').classList.add('active');
+  compareModeActive = true;
+  try { localStorage.setItem('json-viewer-compare-mode', '1'); } catch {}
+}
+
+function exitCompareMode() {
+  document.body.classList.remove('compare-mode');
+  document.getElementById('btn-compare').classList.remove('active');
+  compareModeActive = false;
+  try { localStorage.setItem('json-viewer-compare-mode', '0'); } catch {}
+}
+
+function toggleCompareMode() {
+  if (compareModeActive) exitCompareMode(); else enterCompareMode();
+}
+
+/* ── Restore compare mode on page load ── */
+(function () {
+  try {
+    if (localStorage.getItem('json-viewer-compare-mode') === '1') enterCompareMode();
+  } catch {}
 })();
 </script>
 <a class="gh-link" href="https://github.com/KristerKasemaa/json-viewer" target="_blank" rel="noopener" title="View on GitHub" aria-label="View on GitHub">
