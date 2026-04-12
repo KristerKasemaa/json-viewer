@@ -447,6 +447,7 @@ footer.frozen .path-unpin { display: inline; }
   padding: 0 3px;
   border-radius: 3px;
   white-space: nowrap;
+  position: relative;
 }
 .row:hover { background: var(--row-hover); }
 
@@ -970,6 +971,37 @@ body.compare-mode .cmp-main { display: flex; }
 }
 .cmp-search-cnt.no-match { color: var(--s-err); }
 
+/* Diff annotations */
+/* Removed subtree: class on .node, styles all descendant rows */
+.diff-rem .row           { background: rgba(255,80,80,0.13); box-shadow: inset 3px 0 0 rgba(255,80,80,0.55); }
+.diff-rem .row:hover     { background: rgba(255,80,80,0.22); }
+/* Added subtree */
+.diff-add .row           { background: rgba(40,200,80,0.13); box-shadow: inset 3px 0 0 rgba(40,200,80,0.55); }
+.diff-add .row:hover     { background: rgba(40,200,80,0.22); }
+/* Changed leaf value: class on .row */
+.row.diff-chg            { background: rgba(255,180,50,0.18); box-shadow: inset 3px 0 0 rgba(255,180,50,0.65); }
+.row.diff-chg:hover      { background: rgba(255,180,50,0.28); }
+/* Parent that contains changes: subtle tint on .row */
+.row.diff-mod            { background: rgba(100,150,255,0.07); }
+.row.diff-mod:hover      { background: rgba(100,150,255,0.14); }
+.cmp-diff-stats { font-size: 10px; color: var(--muted); white-space: nowrap; }
+.cmp-diff-stats .ds-add  { color: #28c850; font-weight: 600; }
+.cmp-diff-stats .ds-rem  { color: #ff5050; font-weight: 600; }
+.cmp-diff-stats .ds-chg  { color: #ffb432; font-weight: 600; }
+/* Diff annotations — labels on diff-highlighted rows */
+#cmp-tree-l .diff-rem > .row::after,
+#cmp-tree-r .diff-add > .row::after,
+#cmp-tree-r .row.diff-chg::after,
+#cmp-tree-r .row.diff-mod::after {
+  position: absolute; right: 8px; top: 0;
+  font-size: 9px; letter-spacing: 0.02em;
+  line-height: inherit; pointer-events: none;
+}
+#cmp-tree-l .diff-rem > .row::after  { content: "removed"; color: rgba(255,80,80,0.5); }
+#cmp-tree-r .diff-add > .row::after  { content: "added";   color: rgba(40,200,80,0.5); }
+#cmp-tree-r .row.diff-chg::after     { content: "changed"; color: rgba(255,180,50,0.55); }
+#cmp-tree-r .row.diff-mod::after     { content: "contains changes"; color: rgba(100,150,255,0.4); }
+
 /* Compare footer */
 .cmp-footer { display: none; flex: 1; align-items: center; gap: 8px; overflow: hidden; }
 body.compare-mode .cmp-footer { display: flex; }
@@ -1021,6 +1053,8 @@ body.compare-mode .cmp-footer { display: flex; }
   <button class="btn-g" onclick="cmpExpandBoth()">Expand Both</button>
   <button class="btn-g" onclick="cmpCollapseBoth()">Collapse Both</button>
   <button class="btn-g" onclick="cmpDepth2Both()">Depth 2 Both</button>
+  <div class="cmp-toolbar-sep"></div>
+  <span id="cmp-diff-stats" class="cmp-diff-stats"></span>
 </div>
 
 <div class="main">
@@ -1853,7 +1887,7 @@ function buildPathInto(container, segs) {
   segs.forEach((seg, i) => {
     if (i > 0) container.appendChild(spEl('path-sep', ' -> '));
     container.appendChild(spEl(seg.isIdx ? 'path-idx' : 'path-key',
-      seg.isIdx ? '[' + seg.key + ']' : '"' + seg.key + '"'));
+      seg.isIdx ? '[' + seg.key + ']' : "'" + seg.key + "'"));
   });
 }
 
@@ -2713,12 +2747,19 @@ class CmpSide {
     this.btnPrev.addEventListener('click', () => this.navMatch(-1));
     this.btnNext.addEventListener('click', () => this.navMatch(1));
 
+    this.treeEl.addEventListener('mousemove', e => {
+      mouseX = e.clientX; mouseY = e.clientY;
+      if (!tipFrozen && pathTip.classList.contains('show')) positionTip();
+    });
     this.treeEl.addEventListener('mouseover', e => {
       if (this.pathPinned) return;
       const row = e.target.closest('.row'); if (!row) return;
-      buildPathInto(this.pathEl, getPathSegs(row, this.treeEl));
+      const segs = getPathSegs(row, this.treeEl);
+      buildPathInto(this.pathEl, segs);
+      if (!tipFrozen) { updateTip(segs); pathTip.classList.add('show'); positionTip(); }
     });
     this.treeEl.addEventListener('mouseleave', () => {
+      if (!tipFrozen) pathTip.classList.remove('show');
       if (this.pathPinned) return;
       this.pathEl.textContent = '';
       this.pathEl.appendChild(spEl('path-root', 'hover a node'));
@@ -2740,7 +2781,8 @@ class CmpSide {
   parse() {
     const raw = this.inp.value.trim();
     this.savedHL = []; this.matches = []; this.curIdx = -1;
-    if (!raw) { this.treeEl.innerHTML = ''; this._setStatus('', ''); this._updateCount(); return; }
+    this.data = undefined;
+    if (!raw) { this.treeEl.innerHTML = ''; this._setStatus('', ''); this._updateCount(); if (cmpDiffActive) applyDiff(); return; }
     let data;
     try { data = JSON.parse(raw); }
     catch (e) {
@@ -2748,12 +2790,14 @@ class CmpSide {
       const d = document.createElement('div'); d.className = 'parse-err';
       d.textContent = 'SyntaxError: ' + e.message;
       this.treeEl.appendChild(d);
-      this._setStatus('invalid JSON', 'err'); this._updateCount(); return;
+      this._setStatus('invalid JSON', 'err'); this._updateCount(); if (cmpDiffActive) applyDiff(); return;
     }
+    this.data = data;
     this.treeEl.innerHTML = '';
     this.treeEl.appendChild(build(data, null, true));
     this._setStatus(fmtBytes(new TextEncoder().encode(raw).length), 'ok');
     if (this.searchInp.value.trim()) this.doSearch(); else this._updateCount();
+    if (cmpDiffActive) applyDiff();
   }
 
   fmt() {
@@ -2764,10 +2808,12 @@ class CmpSide {
 
   clear() {
     this.inp.value = ''; this.savedHL = []; this.matches = []; this.curIdx = -1;
+    this.data = undefined;
     this.searchInp.value = ''; this._updateCount();
     this.treeEl.innerHTML = '<div class="empty-msg">Paste JSON above to explore it here.</div>';
     this._setStatus('', ''); this.pathPinned = false;
     this.pathEl.textContent = ''; this.pathEl.appendChild(spEl('path-root', 'hover a node'));
+    if (cmpDiffActive) applyDiff();
   }
 
   _setStatus(msg, cls) { this.statusEl.textContent = msg; this.statusEl.className = cls ? 's-' + cls : ''; }
@@ -2879,6 +2925,107 @@ function toggleCmpSync() {
 function cmpExpandBoth()   { expandAll(cmpTreeL);       expandAll(cmpTreeR); }
 function cmpCollapseBoth() { collapseAll(cmpTreeL);      collapseAll(cmpTreeR); }
 function cmpDepth2Both()   { collapseDeep(2, cmpTreeL);  collapseDeep(2, cmpTreeR); }
+
+/* ── Diff (always active in compare mode) ── */
+const cmpDiffActive = true;
+
+function clearDiff() {
+  cmpTreeL.querySelectorAll('.diff-rem,.diff-add').forEach(n => n.classList.remove('diff-rem', 'diff-add'));
+  cmpTreeR.querySelectorAll('.diff-rem,.diff-add').forEach(n => n.classList.remove('diff-rem', 'diff-add'));
+  cmpTreeL.querySelectorAll('.diff-chg,.diff-mod').forEach(r => r.classList.remove('diff-chg', 'diff-mod'));
+  cmpTreeR.querySelectorAll('.diff-chg,.diff-mod').forEach(r => r.classList.remove('diff-chg', 'diff-mod'));
+  document.getElementById('cmp-diff-stats').textContent = '';
+}
+
+function applyDiff() {
+  clearDiff();
+  if (!cmpSideL || !cmpSideR) return;
+  const ld = cmpSideL.data, rd = cmpSideR.data;
+  const statsEl = document.getElementById('cmp-diff-stats');
+  if (ld === undefined || rd === undefined) {
+    statsEl.innerHTML = '<span style="color:var(--muted2)">parse both sides to diff</span>';
+    return;
+  }
+  const lRoot = cmpTreeL.querySelector(':scope > .node');
+  const rRoot = cmpTreeR.querySelector(':scope > .node');
+  if (!lRoot || !rRoot) return;
+  const stats = { add: 0, rem: 0, chg: 0 };
+  diffNodes(ld, rd, lRoot, rRoot, stats);
+  if (stats.add + stats.rem + stats.chg === 0) {
+    statsEl.innerHTML = '<span style="color:var(--s-ok)">identical</span>';
+  } else {
+    const parts = [];
+    if (stats.add) parts.push(`<span class="ds-add">+${stats.add}</span>`);
+    if (stats.rem) parts.push(`<span class="ds-rem">-${stats.rem}</span>`);
+    if (stats.chg) parts.push(`<span class="ds-chg">~${stats.chg}</span>`);
+    statsEl.innerHTML = parts.join('<span style="color:var(--muted)"> · </span>');
+  }
+}
+
+function diffNodes(lv, rv, lNode, rNode, stats) {
+  const lt = getType(lv), rt = getType(rv);
+  if (lt !== rt || (lt !== 'object' && lt !== 'array')) {
+    if (JSON.stringify(lv) !== JSON.stringify(rv)) {
+      lNode.querySelector(':scope > .row').classList.add('diff-chg');
+      rNode.querySelector(':scope > .row').classList.add('diff-chg');
+      stats.chg++;
+      return true;
+    }
+    return false;
+  }
+  let hasDiff = false;
+  if (lt === 'object') {
+    const lKeys = Object.keys(lv);
+    const rRem = new Set(Object.keys(rv));
+    for (const key of lKeys) {
+      if (!rRem.has(key)) {
+        const lc = diffGetChild(lNode, key);
+        if (lc) { lc.classList.add('diff-rem'); stats.rem++; }
+        hasDiff = true;
+      } else {
+        rRem.delete(key);
+        const lc = diffGetChild(lNode, key), rc = diffGetChild(rNode, key);
+        if (lc && rc && diffNodes(lv[key], rv[key], lc, rc, stats)) hasDiff = true;
+      }
+    }
+    for (const key of rRem) {
+      const rc = diffGetChild(rNode, key);
+      if (rc) { rc.classList.add('diff-add'); stats.add++; }
+      hasDiff = true;
+    }
+  } else {
+    const minLen = Math.min(lv.length, rv.length);
+    for (let i = 0; i < minLen; i++) {
+      const lc = diffGetChild(lNode, i), rc = diffGetChild(rNode, i);
+      if (lc && rc && diffNodes(lv[i], rv[i], lc, rc, stats)) hasDiff = true;
+    }
+    for (let i = minLen; i < lv.length; i++) {
+      const lc = diffGetChild(lNode, i);
+      if (lc) { lc.classList.add('diff-rem'); stats.rem++; }
+      hasDiff = true;
+    }
+    for (let i = minLen; i < rv.length; i++) {
+      const rc = diffGetChild(rNode, i);
+      if (rc) { rc.classList.add('diff-add'); stats.add++; }
+      hasDiff = true;
+    }
+  }
+  if (hasDiff) {
+    lNode.querySelector(':scope > .row').classList.add('diff-mod');
+    rNode.querySelector(':scope > .row').classList.add('diff-mod');
+  }
+  return hasDiff;
+}
+
+function diffGetChild(nodeEl, key) {
+  const kids = nodeEl.querySelector(':scope > .kids');
+  if (!kids) return null;
+  const keyStr = String(key);
+  for (const child of kids.children) {
+    if (child.classList.contains('node') && child.dataset.key === keyStr) return child;
+  }
+  return null;
+}
 
 /* ── Mode toggle ── */
 let compareModeActive = false;
